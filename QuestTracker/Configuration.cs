@@ -1,4 +1,4 @@
-﻿using Dalamud.Configuration;
+using Dalamud.Configuration;
 using Dalamud.Plugin;
 using System;
 
@@ -17,6 +17,7 @@ namespace QuestTracker
         public uint StartClass { get; set; }
         public QuestData CategorySelection { get; set; }
         public QuestData SubcategorySelection { get; set; }
+        public bool ShowQuestIdSearchTab { get; set; } = false;
 
         [NonSerialized]
         private IDalamudPluginInterface pluginInterface;
@@ -32,6 +33,7 @@ namespace QuestTracker
             StartClass = 0;
             CategorySelection = null;
             SubcategorySelection = null;
+            ShowQuestIdSearchTab = false;
             Save();
         }
     }

@@ -8,6 +8,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility;
 using Dalamud.Interface.Windowing;
 using Lumina.Excel.Sheets;
+using FFXIVClientStructs.FFXIV.Client.Game;
 
 namespace QuestTracker
 {
@@ -36,6 +37,11 @@ namespace QuestTracker
         }
 
         private string searchText = "";
+
+        // New ID search tab fields; this tab will be only shown if enabled in settings
+        // (not enabled by default)
+        private string questIdSearchText = "";
+        private List<QuestIdSearchResult> questIdSearchResults = new();
 
         public MainWindow(Plugin plugin, QuestDataManager questDataManager, Configuration configuration)
             : base("Quest Tracker##main_window", ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
@@ -70,6 +76,12 @@ namespace QuestTracker
                         ImGui.EndTabItem();
                     }
 
+                    if (configuration.ShowQuestIdSearchTab && ImGui.BeginTabItem("Quest ID Search##quest_id_tab"))
+                    {
+                        DrawQuestIdSearchTab();
+                        ImGui.EndTabItem();
+                    }
+
                     if (ImGui.BeginTabItem($"Settings##settings_tab"))
                     {
                         DrawSettingsTab();
@@ -81,6 +93,202 @@ namespace QuestTracker
             }
 
             ImGui.End();
+        }
+
+        private void DrawQuestIdSearchTab()
+        {
+            ImGui.BeginChild("##quest_id_search_tab", ImGuiHelpers.ScaledVector2(0), true);
+            
+            ImGui.Text("Quest ID Search");
+            ImGui.Separator();
+            ImGui.Spacing();
+
+            ImGui.Text("Enter quest ID(s):");
+            ImGui.TextDisabled("Example: 1234,1236,1238-1248");
+            
+            ImGui.SetNextItemWidth(-80);
+            bool searchPressed = ImGui.InputTextWithHint("##quest_id_input", "Enter quest ID(s)...", ref questIdSearchText, 256, ImGuiInputTextFlags.EnterReturnsTrue);
+            
+            ImGui.SameLine();
+            if (ImGui.Button("Search") || searchPressed)
+            {
+                SearchQuestIds();
+            }
+
+            ImGui.Spacing();
+
+            if (questIdSearchResults.Count > 0)
+            {
+                ImGui.Text($"Search Results ({questIdSearchResults.Count} found)");
+                ImGui.Separator();
+
+                var availableSize = ImGui.GetContentRegionAvail();
+                if (ImGui.BeginChild("##quest_id_results_scroll", new Vector2(availableSize.X, availableSize.Y), false, ImGuiWindowFlags.HorizontalScrollbar))
+                {
+                    DrawQuestIdResults();
+                }
+                ImGui.EndChild();
+            }
+
+            ImGui.EndChild();
+        }
+
+        private void SearchQuestIds()
+        {
+            questIdSearchResults.Clear();
+
+            if (string.IsNullOrWhiteSpace(questIdSearchText))
+                return;
+
+            var questIds = ParseQuestIdInput(questIdSearchText);
+            var questSheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Quest>();
+
+            foreach (var questId in questIds)
+            {
+                var quest = questSheet?.GetRow(questId);
+                if (quest.HasValue)
+                {
+                    unsafe
+                    {
+                        bool isComplete = QuestManager.IsQuestComplete(questId);
+                        string questName = quest.Value.Name.ToString();
+                        if (string.IsNullOrEmpty(questName))
+                        {
+                            questName = $"[Quest {questId}]";
+                        }
+                        
+                        questIdSearchResults.Add(new QuestIdSearchResult
+                        {
+                            Id = questId,
+                            Name = questName,
+                            Level = quest.Value.ClassJobLevel[0],
+                            IsComplete = isComplete,
+                            Quest = quest.Value
+                        });
+                    }
+                }
+            }
+
+            questIdSearchResults.Sort((a, b) => a.Id.CompareTo(b.Id));
+        }
+
+        private List<uint> ParseQuestIdInput(string input)
+        {
+            var questIds = new HashSet<uint>();
+            var parts = input.Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var part in parts)
+            {
+                var trimmed = part.Trim();
+                
+                // Check if it's a range (numbers separated by a hyphen)
+                if (trimmed.Contains('-'))
+                {
+                    var rangeParts = trimmed.Split('-');
+                    if (rangeParts.Length == 2 && 
+                        uint.TryParse(rangeParts[0].Trim(), out uint start) && 
+                        uint.TryParse(rangeParts[1].Trim(), out uint end))
+                    {
+                        if (start <= end)
+                        {
+                            for (uint i = start; i <= end; i++)
+                            {
+                                questIds.Add(i);
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // Single ID
+                    if (uint.TryParse(trimmed, out uint id))
+                    {
+                        questIds.Add(id);
+                    }
+                }
+            }
+
+            return questIds.ToList();
+        }
+
+        private void DrawQuestIdResults()
+        {
+            if (ImGui.BeginTable("##quest_id_table", 5,
+                ImGuiTableFlags.Resizable |
+                ImGuiTableFlags.BordersOuter |
+                ImGuiTableFlags.BordersV |
+                ImGuiTableFlags.ScrollX |
+                ImGuiTableFlags.SizingFixedFit))
+            {
+                ImGui.TableSetupColumn("##check", ImGuiTableColumnFlags.WidthFixed, 30.0f);
+                ImGui.TableSetupColumn("ID", ImGuiTableColumnFlags.WidthFixed, 80.0f);
+                ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthFixed, 300.0f);
+                ImGui.TableSetupColumn("Level", ImGuiTableColumnFlags.WidthFixed, 60.0f);
+                ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 120.0f);
+                ImGui.TableHeadersRow();
+
+                foreach (var result in questIdSearchResults)
+                {
+                    ImGui.TableNextColumn();
+                    if (result.IsComplete)
+                    {
+                        ImGui.PushFont(UiBuilder.IconFont);
+                        ImGui.TextUnformatted(FontAwesomeIcon.Check.ToIconString());
+                        ImGui.PopFont();
+                    }
+
+                    ImGui.TableNextColumn();
+                    ImGui.Text(result.Id.ToString());
+
+                    ImGui.TableNextColumn();
+                    ImGui.Text(result.Name);
+
+                    ImGui.TableNextColumn();
+                    ImGui.Text(result.Level.ToString());
+
+                    ImGui.TableNextColumn();
+                    if (result.Quest.IssuerLocation.RowId != 0)
+                    {
+                        if (ImGui.Button($"Map##{result.Id}"))
+                        {
+                            OpenQuestMap(result.Quest);
+                        }
+                    }
+                    else
+                    {
+                        ImGui.TextDisabled("No Map");
+                    }
+
+                    ImGui.TableNextRow();
+                }
+
+                ImGui.EndTable();
+            }
+        }
+
+        private void OpenQuestMap(Lumina.Excel.Sheets.Quest quest)
+        {
+            try
+            {
+                if (quest.IssuerLocation.RowId != 0)
+                {
+                    var levelSheet = Plugin.DataManager.GetExcelSheet<Level>();
+                    var level = levelSheet?.GetRow(quest.IssuerLocation.RowId);
+                    
+                    if (level.HasValue)
+                    {
+                        var mapLink = new MapLinkPayload(level.Value.Territory.RowId,
+                                                         level.Value.Map.RowId,
+                                                         (int)(level.Value.X * 1_000f),
+                                                         (int)(level.Value.Z * 1_000f));
+                        Plugin.GameGui.OpenMapWithMapLink(mapLink);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.PluginLog.Error($"Failed to open map for quest {quest.RowId}: {ex.Message}");
+            }
         }
 
         private void DrawOverviewTab()
@@ -451,6 +659,15 @@ namespace QuestTracker
                 configuration.Save();
             }
 
+            ImGui.Spacing();
+
+            var showQuestIdSearchTab = configuration.ShowQuestIdSearchTab;
+            if (ImGui.Checkbox("Show Quest ID Search Tab", ref showQuestIdSearchTab))
+            {
+                configuration.ShowQuestIdSearchTab = showQuestIdSearchTab;
+                configuration.Save();
+            }
+
             ImGui.EndChild();
         }
 
@@ -488,6 +705,15 @@ namespace QuestTracker
                                              (int)(level.X * 1_000f),
                                              (int)(level.Z * 1_000f));
             Plugin.GameGui.OpenMapWithMapLink(mapLink);
+        }
+
+        private class QuestIdSearchResult
+        {
+            public uint Id { get; set; }
+            public string Name { get; set; } = "";
+            public ushort Level { get; set; }
+            public bool IsComplete { get; set; }
+            public Lumina.Excel.Sheets.Quest Quest { get; set; }
         }
     }
 }
